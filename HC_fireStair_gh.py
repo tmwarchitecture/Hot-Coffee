@@ -1,9 +1,9 @@
-﻿from ghpythonlib.componentbase import executingcomponent as component
+from ghpythonlib.componentbase import executingcomponent as component
 import Grasshopper, GhPython
 import System
 import Rhino
 import rhinoscriptsyntax as rs
-
+#From 0.01
 class FireStair(component):
     
     def RunScript(self, rect, lvls):

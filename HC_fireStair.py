@@ -1,24 +1,31 @@
+#!/usr/bin/env python
+
 import rhinoscriptsyntax as rs
 import math
 
+__author__ = "Timothy Williams"
+__credits__ = ["Timothy Williams", "Kit Chung"]
+__version__ = "0.0.2"
+
 class Run():
-    def __init__(self, Rect, deltaHeight, numRisers):
+    def __init__(self, Rect, deltaHeight, numRisers, thickness, runNum):
         self.Rect = Rect
+        self.segments = rs.ExplodeCurves(self.Rect)
         self.deltaHeight = deltaHeight
         self.numRisers = int(numRisers)
-        self.thickness = .15
-    
+        self.thickness = thickness
+        self.riserHeight = self.deltaHeight/self.numRisers
+        self.firstRiserEdge = self.segments[0]
+        self.runLongEdge = self.segments[1]
+        self.treadLength = rs.CurveLength(self.runLongEdge)/self.numRisers
+        self.runNum = runNum+1
     def make(self):
-        self.segments = rs.ExplodeCurves(self.Rect)
-        
-        treadLength = rs.CurveLength(self.segments[1])/self.numRisers
-        riserHeight = self.deltaHeight/self.numRisers
-        runVector = rs.VectorCreate(rs.CurveEndPoint(self.segments[1]),rs.CurveStartPoint(self.segments[1]))
+        runVector = rs.VectorCreate(rs.CurveEndPoint(self.runLongEdge),rs.CurveStartPoint(self.runLongEdge))
         unitRunVec = rs.VectorUnitize(runVector)
-        treadVec = rs.VectorScale(unitRunVec, treadLength) 
-        riseVec = rs.VectorCreate( [0,0,riserHeight], [0,0,0])
+        treadVec = rs.VectorScale(unitRunVec, self.treadLength) 
+        riseVec = rs.VectorCreate( [0,0,self.riserHeight], [0,0,0])
         
-        newPt = [rs.CurveStartPoint(self.segments[0]).X, rs.CurveStartPoint(self.segments[0]).Y, rs.CurveStartPoint(self.segments[0]).Z-self.deltaHeight]
+        newPt = [rs.CurveStartPoint(self.firstRiserEdge).X, rs.CurveStartPoint(self.firstRiserEdge).Y, rs.CurveStartPoint(self.firstRiserEdge).Z-self.deltaHeight]
         ptList = []
         ptList.append(rs.AddPoint(newPt))
         for i in range(self.numRisers):
@@ -40,13 +47,17 @@ class Run():
         
         newStringer = rs.JoinCurves([stringer, closeCrv], True)
         
-        stair = rs.ExtrudeCurve(newStringer, self.segments[0])
+        stair = rs.ExtrudeCurve(newStringer, self.firstRiserEdge)
         rs.CapPlanarHoles(stair)
         rs.DeleteObject(stringer)
         rs.DeleteObject(newStringer)
         rs.DeleteObjects(ptList)
+        rs.DeleteObject(self.firstRiserEdge)
+        rs.DeleteObject(self.runLongEdge)
         rs.DeleteObjects(self.segments)
         return stair
+    def printStats(self):
+        print "Run {}: {} risers at {}mm with {}mm tread length.".format(self.runNum, self.numRisers, self.riserHeight, self.treadLength)
 
 
 def makeFireStair(rect, landingLevels):
@@ -54,16 +65,16 @@ def makeFireStair(rect, landingLevels):
     minGapSize = .2
     minTread = .260
     maxRiser = .180
-    thickness = .15
-    maxRisersInRun = 12
+    thickness = .3
+    maxRisersInRun = 18
+    maxWidth = 2.4
+    scissorStair = True
     
     #(1)Determine Run Direction
     rs.SimplifyCurve(rect)
     rectSegments = rs.ExplodeCurves(rect)
     edge1 = rectSegments[0]
     edge3 = rectSegments[1]
-    rs.DeleteObject(rectSegments[2])
-    rs.DeleteObject(rectSegments[3])
     if rs.CurveLength(edge1) > rs.CurveLength(edge3):
         longEdge = edge1
         shortEdge = edge3
@@ -74,11 +85,18 @@ def makeFireStair(rect, landingLevels):
     longVecRev = rs.VectorReverse(longVec)
     shortVec = rs.VectorCreate(rs.CurveStartPoint(shortEdge), rs.CurveEndPoint(shortEdge))
     shortVecRev = rs.VectorReverse(shortVec)
-    rs.CurveArrows(longEdge, 2)
-    rs.CurveArrows(shortEdge, 2)
     
     #(2)Stair Width
     stairWidth = (rs.CurveLength(shortEdge)-minGapSize)/2
+    if stairWidth < .6:
+        print "ERROR: Stair is ridiculously too narrow."
+        return 
+    
+    #(3)Run Length
+    runLength = rs.CurveLength(longEdge) - (stairWidth*2)
+    if runLength < 1:
+        print "ERROR: Stair is ridiculously too short."
+        return 
     
     #LandingRect
     landing1Plane = rs.PlaneFromFrame(rs.CurveStartPoint(shortEdge), shortVecRev, longVecRev)
@@ -86,8 +104,6 @@ def makeFireStair(rect, landingLevels):
     landing2Plane = rs.PlaneFromFrame(rs.CurveEndPoint(longEdge), shortVec, longVec)
     landing2 = rs.AddRectangle(landing2Plane, rs.CurveLength(shortEdge), stairWidth)
     
-    #(3)Run Length
-    runLength = rs.CurveLength(longEdge) - (stairWidth*2)
     
     #RunRects
     run1Plane = rs.PlaneFromFrame(rs.CurveEditPoints(landing1)[3], shortVecRev, longVecRev)
@@ -158,10 +174,25 @@ def makeFireStair(rect, landingLevels):
     #(9) Draw Stairs
     runs = []
     for i in range(0, numRuns):
-        runs.append(Run(listOfRuns[i], runsDeltaHeight[i], numRisersPerRun[i]))
+        runs.append(Run(listOfRuns[i], runsDeltaHeight[i], numRisersPerRun[i], thickness, i))
         stairGeo.append(runs[i].make())
+        runs[i].printStats()
     
-    rs.BooleanUnion(stairGeo, delete_input = True)
+    finalGeo = rs.BooleanUnion(stairGeo, delete_input = True)
+    
+    #(10) Scissor Stairs
+    if scissorStair:
+        pt0 = rs.CurveMidPoint(rectSegments[0])
+        pt1 = rs.CurveMidPoint(rectSegments[1])
+        pt2 = rs.CurveMidPoint(rectSegments[2])
+        pt3 = rs.CurveMidPoint(rectSegments[3])
+        mir1 = rs.MirrorObject(finalGeo, pt0, pt2, copy = True)
+        mirroredStair = rs.MirrorObject(mir1, pt1, pt3, copy = False)
+    
+    #(11)Label
+    rs.SetUserText(finalGeo, "Brew", "Hot Coffee")
+    rs.SetUserText(mirroredStair, "Brew", "Hot Coffee")
+    
     #Cleanup
     rs.DeleteObjects(listOfRuns)
     rs.DeleteObjects(rectSegments)
@@ -173,9 +204,11 @@ def makeFireStair(rect, landingLevels):
     return None
 
 def main():
-    rect = rs.VisibleObjects()    
+    rect = rs.VisibleObjects()  
+    if rect is None:
+        return
     rs.EnableRedraw(False)
-    landingLevels = [0,6,11,15.1, 18, 22, 30, 40, 42]
+    landingLevels = [0,6,11.5,17]
     makeFireStair(rect, landingLevels)
     rs.EnableRedraw(True)
 
