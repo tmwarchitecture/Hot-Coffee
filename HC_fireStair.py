@@ -26,6 +26,7 @@ class Run():
         riseVec = rs.VectorCreate( [0,0,self.riserHeight], [0,0,0])
         
         newPt = [rs.CurveStartPoint(self.firstRiserEdge).X, rs.CurveStartPoint(self.firstRiserEdge).Y, rs.CurveStartPoint(self.firstRiserEdge).Z-self.deltaHeight]
+        
         ptList = []
         ptList.append(rs.AddPoint(newPt))
         for i in range(self.numRisers):
@@ -36,19 +37,46 @@ class Run():
             rs.MoveObject(tempPt, treadVec)
             ptList.append(tempPt)
         
-        downLine = rs.VectorCreate([0,0,0], [0,0,self.thickness])
-        newBtmPt = rs.MoveObject(rs.CopyObject(ptList[0]), downLine)
-        ptList.insert(0, newBtmPt)
-        newBtmPt2 = rs.MoveObject(rs.CopyObject(ptList[-1]), downLine)
-        ptList.append(newBtmPt2)
+        #construct offset line
+        undersideLine = rs.AddLine(ptList[0], ptList[-1])
+        closestPtParam = rs.CurveClosestPoint(undersideLine, ptList[1])
+        closestPt = rs.EvaluateCurve(undersideLine, closestPtParam)
+        perpVec = rs.VectorUnitize(rs.VectorCreate(ptList[1], closestPt))
+        stringerBtm = rs.MoveObject(undersideLine, rs.VectorScale(perpVec, -self.thickness))
+        cnstrLine = rs.ScaleObject(stringerBtm, rs.CurveMidPoint(stringerBtm),[2,2,2]) 
         
+        #line going down
+        btmPt = rs.MoveObject(ptList[0], [0,0,-self.thickness]) 
+        moveDir = rs.VectorCreate(ptList[2], ptList[1] )
+        btmPtMoved = rs.MoveObject(rs.CopyObject(btmPt), rs.VectorScale(moveDir, 3))
+        btmLineCnstr = rs.AddLine(btmPt, btmPtMoved)
+        ptIntersectBtm = rs.AddPoint(rs.LineLineIntersection(btmLineCnstr, cnstrLine)[0]) #yes
+        
+        #top lines
+        topVec = rs.VectorScale(rs.VectorCreate(ptList[-1], ptList[-2]), 5)
+        topPtTemp = rs.MoveObject(rs.CopyObject(ptList[-1]), topVec)
+        topLine = rs.AddLine(ptList[-1], topPtTemp)
+        ptIntersectTop = rs.AddPoint(rs.LineLineIntersection(topLine, cnstrLine)[0]) #yes
+        
+        ptList.append(ptIntersectTop)
+        ptList.append(ptIntersectBtm)
+                
         stringer = rs.AddPolyline(ptList)
         closeCrv = rs.AddLine(rs.CurveStartPoint(stringer), rs.CurveEndPoint(stringer))
         
         newStringer = rs.JoinCurves([stringer, closeCrv], True)
         
         stair = rs.ExtrudeCurve(newStringer, self.firstRiserEdge)
+        
         rs.CapPlanarHoles(stair)
+        
+        rs.DeleteObject(btmLineCnstr)
+        rs.DeleteObject(btmPtMoved)
+        rs.DeleteObject(btmLineCnstr)
+        rs.DeleteObject(ptIntersectTop)
+        rs.DeleteObject(undersideLine)
+        rs.DeleteObject(topPtTemp)
+        rs.DeleteObject(topLine)
         rs.DeleteObject(stringer)
         rs.DeleteObject(newStringer)
         rs.DeleteObjects(ptList)
@@ -208,7 +236,7 @@ def main():
     if rect is None:
         return
     rs.EnableRedraw(False)
-    landingLevels = [0,6,11.5,17]
+    landingLevels = [0,6,11.5]
     makeFireStair(rect, landingLevels)
     rs.EnableRedraw(True)
 
