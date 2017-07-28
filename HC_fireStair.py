@@ -7,11 +7,13 @@ __author__ = "Timothy Williams"
 __credits__ = ["Timothy Williams", "Kit Chung"]
 __version__ = "0.0.2"
 class Handrail():
-    def __init__(self, guideCrv, stairWidthEdge):
+    def __init__(self, guideCrv, stairWidthEdge, hdrlHeight, treadLength):
         self.guideCrv = guideCrv
         self.hdrlDistFromWall = .038
         self.stairWidthEdge = stairWidthEdge
-    def addExtlHandrail(self, hdrlHeight, treadLength):
+        self.hdrlHeight = hdrlHeight
+        self.treadLength = treadLength
+    def addExtlHandrail(self):
         hdrlPtList = []
         hdrlEndPt = rs.AddPoint(rs.CurveEndPoint(self.guideCrv))
         hdrlStPt = rs.AddPoint(rs.CurveStartPoint(self.guideCrv))
@@ -34,7 +36,7 @@ class Handrail():
         
         rs.MoveObject(btmVertPtExtTemp, [0,0,-1])
         vertLineTemp = rs.AddLine(btmVertPtExtTemp, hdrlStPt)
-        rs.MoveObject(vertLineTemp, rs.VectorScale(projHdrlVec, treadLength))
+        rs.MoveObject(vertLineTemp, rs.VectorScale(projHdrlVec, self.treadLength))
         
         btmExtPt = rs.LineLineIntersection(angledLineTemp, vertLineTemp)[0]
         hdrlPtList.append(hdrlEndPt)
@@ -42,7 +44,7 @@ class Handrail():
         
         #Make and move
         hdrlCrv = rs.AddPolyline(hdrlPtList)
-        rs.MoveObject(hdrlCrv, [0,0,hdrlHeight])
+        rs.MoveObject(hdrlCrv, [0,0,self.hdrlHeight])
         
         #move away from wall
         widthVec = rs.VectorUnitize(rs.VectorCreate(rs.CurveEndPoint(self.stairWidthEdge), rs.CurveStartPoint(self.stairWidthEdge)))
@@ -58,11 +60,63 @@ class Handrail():
         rs.DeleteObject(angledLineTemp)
         rs.DeleteObject(vertLineTemp)
         rs.DeleteObject(btmExtEndPt)
-        rs.DeleteObject(self.guideCrv)
+        
         
         return hdrlCrv
-    def addIntlHandrail(self, hdrlHeight, treadLength):
-        return
+    def addIntlHandrail(self, minGapSize, riserHeight, extensionLength):
+        innerGuideCrv = rs.CopyObject(self.guideCrv)
+        ptList = []
+        stairWidth = rs.CurveLength(self.stairWidthEdge)
+        stairEdgeEnd = rs.CurveEndPoint(self.stairWidthEdge)
+        stairEdgeStart = rs.CurveStartPoint(self.stairWidthEdge)
+        widthVec = rs.VectorUnitize(rs.VectorCreate(stairEdgeEnd, stairEdgeStart))
+        rs.MoveObject(innerGuideCrv, rs.VectorScale(widthVec, stairWidth-self.hdrlDistFromWall))
+        
+        guideCrvVec = rs.VectorUnitize(rs.VectorCreate(rs.CurveEndPoint(self.guideCrv), rs.CurveStartPoint(self.guideCrv)))
+        projGuideVec = rs.VectorUnitize([guideCrvVec.X, guideCrvVec.Y, 0])
+        
+        guideCrvStPt = rs.AddPoint(rs.CurveStartPoint(innerGuideCrv)) ######1
+        guideCrvEndPt = rs.AddPoint(rs.CurveEndPoint(innerGuideCrv))
+        
+        #(1) Angled Extension
+        angledEndPt = rs.MoveObject(rs.CopyObject(guideCrvStPt), rs.VectorScale(guideCrvVec, -1))
+        angledLine = rs.AddLine(guideCrvStPt, angledEndPt)
+        
+        #(2) vertLine
+        vertLineBtmPt = rs.MoveObject(rs.CopyObject(guideCrvStPt), [0,0,-riserHeight])
+        vertLine = rs.AddLine(vertLineBtmPt, guideCrvStPt)
+        
+        
+        #intersection
+        rs.MoveObject(vertLine, rs.VectorScale(projGuideVec, -self.hdrlDistFromWall))
+        rs.MoveObject(vertLineBtmPt, rs.VectorScale(projGuideVec, -self.hdrlDistFromWall)) ######3
+        extIntPt = rs.AddPoint(rs.LineLineIntersection(angledLine, vertLine)[0]) ######2
+        
+        #(3) Crosspiece
+        crossPieceEnd = rs.MoveObject(rs.CopyObject(vertLineBtmPt), rs.VectorScale(widthVec, (self.hdrlDistFromWall*2)+minGapSize)) #####4
+        
+        
+        #(4) topExtension
+        topExtEndPt = rs.MoveObject(rs.CopyObject(guideCrvEndPt), rs.VectorScale(projGuideVec, extensionLength+self.hdrlDistFromWall+self.treadLength)) ####1
+        
+        #Create final line
+        ptList.append(topExtEndPt)
+        ptList.append(guideCrvEndPt)
+        ptList.append(extIntPt)
+        ptList.append(vertLineBtmPt)
+        ptList.append(crossPieceEnd)
+        finalLine = rs.AddPolyline(ptList)
+        
+        rs.MoveObject(finalLine, [0,0,self.hdrlHeight])
+        
+        #cleanup
+        rs.DeleteObjects([topExtEndPt,guideCrvEndPt,  extIntPt, vertLineBtmPt, crossPieceEnd])
+        rs.DeleteObject(angledLine)
+        rs.DeleteObject(vertLine)
+        rs.DeleteObject(angledEndPt)
+        rs.DeleteObject(guideCrvStPt)
+        rs.DeleteObject(innerGuideCrv)
+        return finalLine
 
 class Run():
     def __init__(self, Rect, deltaHeight, numRisers, thickness, runNum, maxTread):
@@ -118,9 +172,10 @@ class Run():
         topVec = rs.VectorScale(rs.VectorUnitize(rs.VectorCreate(ptList[-1], ptList[-2])), self.extenionLength)
         topPt1 = rs.MoveObject(ptList[-1], topVec)
         topPtDown = rs.MoveObject(rs.CopyObject(topPt1), [0,0,-self.thickness])
-        if self.extenionLength<.1:
-            self.extenionLength = .1
-        topVec = rs.VectorScale(rs.VectorUnitize(rs.VectorCreate(ptList[-1], ptList[-2])), self.extenionLength)
+        extLengthTemp = self.extenionLength
+        if extLengthTemp<.1:
+            extLengthTemp = .1
+        topVec = rs.VectorScale(rs.VectorUnitize(rs.VectorCreate(ptList[-1], ptList[-2])), extLengthTemp)
         topPtTemp = rs.MoveObject(rs.CopyObject(topPtDown), topVec)
         topLine = rs.AddLine(topPtDown, topPtTemp)
         ptIntersectTop = rs.AddPoint(rs.LineLineIntersection(topLine, cnstrLine)[0]) #yes
@@ -154,14 +209,15 @@ class Run():
         rs.DeleteObjects(ptList)
         
         return stair
-    def makeHandrail(self, hdrlHeight):
-        handrail = Handrail(self.guideCrv, self.segments[0])
-        handrail.addExtlHandrail(hdrlHeight, self.treadLength)
-        handrail.addIntlHandrail(hdrlHeight, self.treadLength)
+    def makeHandrail(self, hdrlHeight, minGapSize):
+        handrail = Handrail(self.guideCrv, self.segments[0], hdrlHeight, self.treadLength)
+        handrail.addExtlHandrail()
+        handrail.addIntlHandrail(minGapSize, self.riserHeight, self.extenionLength)
     def cleanup(self):
         rs.DeleteObjects(self.segments)
         rs.DeleteObject(self.firstRiserEdge)
         rs.DeleteObject(self.runLongEdge)
+        rs.DeleteObject(self.guideCrv)
     def printStats(self):
         print "Run {}: {} risers at {}mm with {}mm tread length.".format(self.runNum, self.numRisers, self.riserHeight, self.treadLength)
 
@@ -176,10 +232,10 @@ def makeFireStair(rect, landingLevels):
     maxTread = .400
     minRiser = .100
     maxRiser = .180
-    thickness = .3
-    maxRisersInRun = 18
+    thickness = .25
+    maxRisersInRun = 16
     maxWidth = 2.4
-    scissorStair = True
+    scissorStair = False
     hdrlHeight = .900
     #hdrlTopExtension = .305
     #hdrlBtmExtension = 1*treadDepth
@@ -290,12 +346,12 @@ def makeFireStair(rect, landingLevels):
     for i in range(0, numRuns):
         runs.append(Run(listOfRuns[i], runsDeltaHeight[i], numRisersPerRun[i], thickness, i, maxTread))
         stairGeo.append(runs[i].make())
-        runs[i].makeHandrail(hdrlHeight)
+        runs[i].makeHandrail(hdrlHeight, minGapSize)
         runs[i].printStats()
         runs[i].cleanup()
     
     finalGeo = rs.BooleanUnion(stairGeo, delete_input = True)
-    
+        
     #(10) Scissor Stairs
     if scissorStair:
         pt0 = rs.CurveMidPoint(rectSegments[0])
